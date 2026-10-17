@@ -23,6 +23,8 @@ public actor SlidingWindowAsrManager {
     private var tokenContinuation: AsyncThrowingStream<SlidingWindowTokenUpdate, Error>.Continuation?
     private var tokenSubscriberID: UUID?
     private var tokenCursor = SlidingWindowTokenCursor()
+    /// Tokens already published as irrevocable; later revisions never go below it.
+    private var publishedStableTokenCount = 0
     private var tokenSubscriptionClosed = false
     private var hasAcceptedAudio = false
 
@@ -227,6 +229,7 @@ public actor SlidingWindowAsrManager {
 
         // Reset sliding window state
         tokenCursor = SlidingWindowTokenCursor()
+        publishedStableTokenCount = 0
         segmentIndex = 0
         lastProcessedFrame = 0
         accumulatedTokens.removeAll()
@@ -532,7 +535,8 @@ public actor SlidingWindowAsrManager {
                     previousTokenTimestamps: accumulatedTokenTimestamps,
                     globalFrameOffset: windowStartSample / ASRConstants.samplesPerEncoderFrame,
                     isLastChunk: isLastChunk,
-                    language: config.language
+                    language: config.language,
+                    stableTokenFloor: tokenContinuation != nil ? publishedStableTokenCount : 0
                 )
             else {
                 failTokenStream(SlidingWindowTokenStreamError.invalidNativeUpdate)
@@ -676,7 +680,8 @@ public actor SlidingWindowAsrManager {
                       let manager = asrManager else {
                     throw SlidingWindowTokenStreamError.invalidNativeUpdate
                 }
-                let stable = await manager.stableStreamingTokenCount(accumulatedTokens)
+                let stable = max(
+                    await manager.stableStreamingTokenCount(accumulatedTokens), publishedStableTokenCount)
                 let end = windowStartSample + windowSamples.count
                 let centerEnd = min(end, nextWindowCenterStart + config.chunkSamples)
                 try publishTokenUpdate(
@@ -684,6 +689,7 @@ public actor SlidingWindowAsrManager {
                     retained: retainedTokenCount, stable: stable,
                     window: windowStartSample..<end,
                     center: nextWindowCenterStart..<centerEnd, isConfirmed: shouldConfirm)
+                publishedStableTokenCount = stable
             }
             updateContinuation?.yield(update)
 
