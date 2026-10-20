@@ -584,6 +584,37 @@ final class TokenDeduplicationRegressionTests: XCTestCase {
         XCTAssertNil(AsrManager.trailingWordStartIndex(pieces: []))
     }
 
+    /// A re-decoded apostrophe suffix glues the last word to a word a token
+    /// subscriber already holds as stable (`▁it` stable, then `'` `s`). The next
+    /// re-decode must retire only what lies past that stable prefix.
+    func testRedecodeWordStart_NeverCutsIntoThePublishedStablePrefix() {
+        let pieces = ["▁say", "▁it", "'", "s"]
+        XCTAssertEqual(AsrManager.trailingWordStartIndex(pieces: pieces), 1)
+        XCTAssertEqual(AsrManager.redecodeWordStart(pieces: pieces, stableTokenFloor: 0), 1)
+        XCTAssertEqual(AsrManager.redecodeWordStart(pieces: pieces, stableTokenFloor: 2), 2)
+        XCTAssertNil(
+            AsrManager.redecodeWordStart(pieces: pieces, stableTokenFloor: 4),
+            "an all-stable previous window has no word left to re-decode")
+        XCTAssertNil(AsrManager.redecodeWordStart(pieces: ["▁one", "word"], stableTokenFloor: 0))
+    }
+
+    /// With the stable floor the seam can start mid-word (`'` after a stable
+    /// `▁it`). Reconciliation may retire only tokens from that start onwards.
+    func testReconcileFinalWindowSeam_MidWordStartNeverRetiresTheStablePrefix() {
+        let previousPieces = ["▁say", "▁it", "'", "s"]
+        let seam = AsrManager.reconcileFinalWindowSeam(
+            previousTokens: [1, 2, 3, 4],
+            previousTimestamps: [10, 20, 25, 28],
+            trailingWordStart: 2,
+            currentTokens: [3, 4, 5],
+            currentTimestamps: [25, 28, 40],
+            currentPieces: ["'", "s", "▁now"],
+            previousPieces: previousPieces
+        )
+        XCTAssertLessThanOrEqual(seam.droppedPrevious, previousPieces.count - 2)
+        XCTAssertLessThan(seam.droppedCurrent, 3, "the new word after the seam is kept")
+    }
+
     /// Clip 03 of the #855 fixtures: previous `▁c ode ▁and ▁an`, re-decode
     /// `, ▁and ▁anal y z ing`. `an` is a strict prefix of `analyzing`: retire it;
     /// the seam comma and the re-emitted `and` (dup of the kept `and`@153) go.

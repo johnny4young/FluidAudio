@@ -100,6 +100,16 @@ extension AsrManager {
         return idx
     }
 
+    /// Where the re-decode retires the previous window's last word, never inside
+    /// the prefix a token subscriber was already told is stable: a continuation
+    /// piece (an apostrophe suffix) can re-attach the last word to a stable one.
+    /// Pure, for testability.
+    nonisolated internal static func redecodeWordStart(pieces: [String], stableTokenFloor: Int) -> Int? {
+        guard let start = trailingWordStartIndex(pieces: pieces) else { return nil }
+        let floored = max(start, stableTokenFloor)
+        return floored < pieces.count ? floored : nil
+    }
+
     /// The words of `pieces[0..<upTo]` as (core text, start frame), for matching
     /// re-emitted words at the seam. Pure.
     nonisolated internal static func words(
@@ -431,6 +441,13 @@ extension AsrManager {
         return (droppedPrevious, droppedCurrent)
     }
 
+    /// The decoder may retire only its trailing word. Use its exact boundary,
+    /// not confidence, text suffix guesses or timestamp tolerances. Holding all
+    /// tokens when no boundary exists is conservative until terminal drain.
+    func stableStreamingTokenCount(_ tokens: [Int]) -> Int {
+        Self.trailingWordStartIndex(pieces: tokens.map { vocabulary[$0] ?? "" }) ?? 0
+    }
+
     /// Chunk transcription that preserves decoder state between calls.
     /// Used by SlidingWindowAsrManager for overlapping-window processing with token deduplication.
     func transcribeChunk(
@@ -440,7 +457,8 @@ extension AsrManager {
         previousTokenTimestamps: [Int]? = nil,
         globalFrameOffset: Int = 0,
         isLastChunk: Bool = false,
-        language: Language? = nil
+        language: Language? = nil,
+        stableTokenFloor: Int = 0
     ) async throws -> (
         tokens: [Int], timestamps: [Int], confidences: [Float], encoderSequenceLength: Int,
         droppedPreviousTokens: Int
@@ -464,7 +482,8 @@ extension AsrManager {
         let redecodeWindow = isLastChunk || !previousTokens.isEmpty
         let trailingWordStart: Int? =
             redecodeWindow && previousTokenTimestamps?.count == previousTokens.count
-            ? Self.trailingWordStartIndex(pieces: previousTokens.map { vocabulary[$0] ?? "" })
+            ? Self.redecodeWordStart(
+                pieces: previousTokens.map { vocabulary[$0] ?? "" }, stableTokenFloor: stableTokenFloor)
             : nil
         let redecodePlan = Self.redecodePlan(
             redecode: redecodeWindow,
