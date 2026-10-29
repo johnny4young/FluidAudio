@@ -128,7 +128,9 @@ jobs:
       # NemoTextProcessing.xcframework ships no tvOS slice, so the library must
       # build with the engine absent (#890). Nothing else compiles this triple.
       - name: Build library (tvOS simulator)
-        run: swift build --product FluidAudio --triple arm64-apple-tvos-simulator
+        run: |
+          swift build --target FluidAudio --triple arm64-apple-tvos-simulator \
+            --sdk "$(xcrun --sdk appletvsimulator --show-sdk-path)"
 
   build-ios:
     name: Build (iOS)
