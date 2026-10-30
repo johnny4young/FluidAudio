@@ -64,13 +64,16 @@ public actor SlidingWindowAsrManager {
 
     // One publication boundary for the real inference path and model-free
     // contract characterization. Failed publication permanently closes lineage.
-    func publishTokenUpdate(tokens: [TokenTiming], previous: Int, retained: Int, stable: Int,
-                            window: Range<Int>, center: Range<Int>, isConfirmed: Bool = false) throws {
+    func publishTokenUpdate(
+        tokens: [TokenTiming], previous: Int, retained: Int, stable: Int,
+        window: Range<Int>, center: Range<Int>, isConfirmed: Bool = false
+    ) throws {
         guard let continuation = tokenContinuation else { return }
         do {
-            continuation.yield(try tokenCursor.next(
-                tokens: tokens, previous: previous, retained: retained, stable: stable,
-                window: window, center: center, isConfirmed: isConfirmed))
+            continuation.yield(
+                try tokenCursor.next(
+                    tokens: tokens, previous: previous, retained: retained, stable: stable,
+                    window: window, center: center, isConfirmed: isConfirmed))
         } catch {
             failTokenStream(error)
             throw error
@@ -675,9 +678,10 @@ public actor SlidingWindowAsrManager {
 
             if tokenContinuation != nil {
                 guard let rawTimings = interim.tokenTimings,
-                      rawTimings.count == tokens.count,
-                      zip(rawTimings, tokens).allSatisfy({ $0.tokenId == $1 }),
-                      let manager = asrManager else {
+                    rawTimings.count == tokens.count,
+                    zip(rawTimings, tokens).allSatisfy({ $0.tokenId == $1 }),
+                    let manager = asrManager
+                else {
                     throw SlidingWindowTokenStreamError.invalidNativeUpdate
                 }
                 let stable = max(
