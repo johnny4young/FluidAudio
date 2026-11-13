@@ -447,6 +447,52 @@ final class AudioConverterTests: XCTestCase {
             "Second conversion should work expected 8000, got \(result2.count)")
     }
 
+    func testReusedConverterMatchesFreshConverterBitForBit() async throws {
+        // Live capture delivers small buffers of uneven sizes; formats can change mid-stream.
+        let source48k = try createAudioBuffer(sampleRate: 48000, channels: 1, duration: 0.5)
+        let source44k = try createAudioBuffer(sampleRate: 44100, channels: 2, duration: 0.2)
+        let buffers =
+            try [512, 128, 4800, 481].map { try slice(source48k, frames: $0) }
+            + [try slice(source44k, frames: 1024)]
+            + [try slice(source48k, frames: 512)]
+
+        for buffer in buffers {
+            let fresh = try AudioConverter().resampleBuffer(buffer)
+            let reused = try audioConverter.resampleBuffer(buffer)
+            XCTAssertEqual(reused, fresh, "\(buffer.frameLength) frames at \(buffer.format.sampleRate) Hz")
+        }
+    }
+
+    func testConcurrentConversionsMatchSerialResults() async throws {
+        let source = try createAudioBuffer(sampleRate: 48000, channels: 1, duration: 0.5)
+        let buffers = try (0..<16).map { try slice(source, frames: 256 + $0 * 37) }
+        let expected = try buffers.map { try AudioConverter().resampleBuffer($0) }
+        let converter = audioConverter!
+
+        let results = try await withThrowingTaskGroup(of: (Int, [Float]).self) { group in
+            for (index, buffer) in buffers.enumerated() {
+                nonisolated(unsafe) let buffer = buffer
+                group.addTask { (index, try converter.resampleBuffer(buffer)) }
+            }
+            var byIndex = [[Float]](repeating: [], count: buffers.count)
+            for try await (index, samples) in group { byIndex[index] = samples }
+            return byIndex
+        }
+        XCTAssertEqual(results, expected)
+    }
+
+    private func slice(_ buffer: AVAudioPCMBuffer, frames: Int) throws -> AVAudioPCMBuffer {
+        guard
+            let out = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: AVAudioFrameCount(frames)),
+            let source = buffer.floatChannelData, let target = out.floatChannelData
+        else { throw AudioConverterError.failedToCreateBuffer }
+        out.frameLength = AVAudioFrameCount(frames)
+        for channel in 0..<Int(buffer.format.channelCount) {
+            target[channel].update(from: source[channel], count: frames)
+        }
+        return out
+    }
+
     func testConverterFormatSwitching() async throws {
         // Convert from one format
         let buffer1 = try createAudioBuffer(sampleRate: 44100, channels: 1)

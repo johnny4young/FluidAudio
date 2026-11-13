@@ -10,11 +10,15 @@ import os
 /// Implementation notes:
 /// - Uses `AVAudioConverter` for all sample-rate, sample-format, and channel-count conversions.
 /// - Avoids any manual resampling; only raw sample extraction occurs after conversion.
-/// - Creates a new converter for each operation (stateless).
+/// - Reuses the last `AVAudioConverter` while the formats match and resets it before every operation, so each
+///   call stays stateless and matches a freshly created converter bit for bit.
 final public class AudioConverter: Sendable {
     private let logger = AppLogger(category: "AudioConverter")
     private let targetFormat: AVAudioFormat
     private let debug: Bool
+    /// Building a mastering-quality converter costs about as much as converting a short buffer.
+    /// A converter is checked out for each call, so concurrent callers never share one.
+    private let cachedConverter = OSAllocatedUnfairLock<AVAudioConverter?>(uncheckedState: nil)
 
     /// Public initializer so external modules (e.g. CLI) can construct the converter
     /// - Parameters:
@@ -304,10 +308,8 @@ final public class AudioConverter: Sendable {
             return try linearResample(buffer, to: format)
         }
 
-        guard let converter = AVAudioConverter(from: inputFormat, to: format) else {
-            throw AudioConverterError.failedToCreateConverter
-        }
-        configure(converter: converter)
+        let converter = try checkOutConverter(from: inputFormat, to: format)
+        defer { checkIn(converter) }
 
         // Estimate first pass capacity and allocate
         let sampleRateRatio = format.sampleRate / inputFormat.sampleRate
@@ -367,6 +369,26 @@ final public class AudioConverter: Sendable {
         }
 
         return aggregated
+    }
+
+    private func checkOutConverter(from input: AVAudioFormat, to output: AVAudioFormat) throws -> AVAudioConverter {
+        let cached = cachedConverter.withLockUnchecked { slot -> AVAudioConverter? in
+            defer { slot = nil }
+            return slot
+        }
+        if let cached, cached.inputFormat == input, cached.outputFormat == output {
+            cached.reset()
+            return cached
+        }
+        guard let converter = AVAudioConverter(from: input, to: output) else {
+            throw AudioConverterError.failedToCreateConverter
+        }
+        configure(converter: converter)
+        return converter
+    }
+
+    private func checkIn(_ converter: AVAudioConverter) {
+        cachedConverter.withLockUnchecked { $0 = converter }
     }
 
     private func configure(converter: AVAudioConverter) {
