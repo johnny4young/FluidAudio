@@ -266,7 +266,7 @@ The offline controller mirrors the reference pipeline:
 - `embedding`: Batch size and overlap handling. Keep `excludeOverlap` enabled for community-1 style powerset outputs.
 - `clustering`: The VBx warm-start threshold plus pyannote's Fa/Fb priors.
 - `vbx`: Max iterations and convergence tolerance for the refinement loop.
-- `postProcessing`: Minimum gap duration when stitching segments back together.
+- `postProcessing`: Minimum gap duration when stitching segments back together, and `exclusiveSegments`. It defaults to `false`, which keeps overlapping speech like pyannote's main `speaker_diarization` output. Set it to `true` when you need one speaker at a time, for example to attribute ASR words; a segment that starts while an earlier one is still active is then trimmed to start when that one ends. The CLI flags are `--exclusive-segments` and `--overlapping-segments` (the default).
 - `export`: Optional `embeddingsPath` for dumping per-speaker vectors to JSON.
 
 #### Why VBx has no transition (self-loop) prior
@@ -328,6 +328,22 @@ This approach is useful when you need to:
 - Implement custom cleanup or caching logic
 
 For most use cases, the simpler `manager.process(url)` API is recommended.
+
+#### Embedding Known Spans
+
+When the speaker turns already exist (from another diarizer, or a transcript), `embedSpans` returns one 256-dim
+WeSpeaker embedding per time span, skipping segmentation and clustering. The vectors are the same kind as
+`speakerDatabase` values (raw, not normalized), so they can be compared with cosine similarity:
+
+```swift
+let embeddings = try await manager.embedSpans(
+    audioSource: source,
+    spans: [12.0..<18.5, 40.2..<44.0]
+)
+```
+
+Each span is repeated to fill the 10 s model window. Spans longer than a window are cut into equal pieces and their
+embeddings averaged. Predictions run in batches of `embedding.batchSize` windows.
 
 ## Streaming/Real-time Processing
 
@@ -725,7 +741,7 @@ swift run fluidaudiocli diarization-benchmark --single-file ES2004a
 ## Troubleshooting
 
 ### High DER on certain audio
-- Check if audio has overlapping speech (not yet supported)
+- Check if audio has overlapping speech: `DiarizerManager` handles it poorly (see the comparison table above). The offline pipeline keeps overlapping speakers unless `exclusiveSegments` is `true`.
 - Ensure 16kHz sampling rate
 - Verify audio isn't too noisy
 

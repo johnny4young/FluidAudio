@@ -43,6 +43,35 @@ final class KokoroAneV3Tests: XCTestCase {
         XCTAssertFalse(loaded)
     }
 
+    func testRejectsFp32VocoderBeforeDownloading() async throws {
+        // The fp32 Vocoder is legacy-only for now (#1135); v3 must not ignore it silently.
+        let store = KokoroAneModelStore(version: .v3, vocoderPrecision: .float32)
+        do {
+            try await store.loadIfNeeded()
+            XCTFail("fp32 vocoder request was silently ignored by v3")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("fp32 vocoder"))
+        }
+        let loaded = await store.isLoaded
+        XCTAssertFalse(loaded)
+    }
+
+    // #1103: a Metal-free routing (the OS 27 default) skips the fast vocoder,
+    // whose SourceGenerator only pays off on the GPU, and never fetches its assets.
+    func testMetalFreeRoutingSkipsFastVocoderAndItsAssets() {
+        XCTAssertTrue(KokoroAneV3Pipeline.usesFastVocoder(.aneTailGpu))
+        XCTAssertFalse(KokoroAneV3Pipeline.usesFastVocoder(.aneTailCpu))
+        for path in [
+            "decoder/KokoroDecoderPre_120.mlpackage/Manifest.json",
+            "fast/KokoroSourceGenerator.mlpackage/Manifest.json", "fast/native-source.json",
+        ] {
+            XCTAssertTrue(KokoroAneV3Assets.isFastVocoderFile(path), path)
+        }
+        for path in ["fast/KokoroAlbert_32.mlpackage/Manifest.json", "vocab.json", "af_heart.bin"] {
+            XCTAssertFalse(KokoroAneV3Assets.isFastVocoderFile(path), path)
+        }
+    }
+
     func testIntegrityRejectsChangedOrTruncatedContent() {
         // Standard SHA-256 test vector, independent of the implementation.
         let file = KokoroAneV3Assets.File(
@@ -51,6 +80,42 @@ final class KokoroAneV3Tests: XCTestCase {
         XCTAssertTrue(KokoroAneV3Assets.matches(Data("abc".utf8), file: file))
         XCTAssertFalse(KokoroAneV3Assets.matches(Data("abd".utf8), file: file))
         XCTAssertFalse(KokoroAneV3Assets.matches(Data("ab".utf8), file: file))
+    }
+
+    func testCompiledBundleMapsSourcePackageFiles() throws {
+        // #1043: ensure() skips a source-package file once the pipeline has
+        // compiled its sibling .mlmodelc. Pure path mapping; the gated
+        // real-model test covers the filesystem behavior end to end.
+        let root = URL(fileURLWithPath: "/models/en", isDirectory: true)
+        func bundle(_ path: String) -> String? {
+            KokoroAneV3Assets.compiledBundleURL(forSourceFile: path, root: root)?.path
+        }
+        XCTAssertEqual(
+            bundle("fast/KokoroAlbert_32.mlpackage/Manifest.json"), "/models/en/fast/KokoroAlbert_32.mlmodelc")
+        XCTAssertEqual(
+            bundle("fast/KokoroAlbert_32.mlpackage/Data/com.apple.CoreML/weights/weight.bin"),
+            "/models/en/fast/KokoroAlbert_32.mlmodelc")
+        XCTAssertEqual(
+            bundle("decoder/KokoroDecoderPre_120.mlpackage/Manifest.json"),
+            "/models/en/decoder/KokoroDecoderPre_120.mlmodelc")
+        XCTAssertEqual(
+            bundle("base/KokoroAlbert.mlpackage/Data/com.apple.CoreML/model.mlmodel"),
+            "/models/en/base/KokoroAlbert.mlmodelc")
+        // Loose assets and the published compiled bundles have no source
+        // package, so they are always verified.
+        for path in [
+            "vocab.json", "af_heart.bin", "fast/native-source.json",
+            "base/KokoroProsody_v2.mlmodelc/model.mil", "base/KokoroTail_v2.mlmodelc/weights/weight.bin",
+        ] {
+            XCTAssertNil(bundle(path), path)
+            XCTAssertFalse(KokoroAneV3Assets.hasCompiledBundle(forSourceFile: path, root: root), path)
+        }
+        // No bundle on disk: the source is still checked.
+        XCTAssertFalse(
+            KokoroAneV3Assets.isCompiledBundle(at: root.appendingPathComponent("fast/KokoroAlbert_32.mlmodelc")))
+        XCTAssertFalse(
+            KokoroAneV3Assets.hasCompiledBundle(
+                forSourceFile: "fast/KokoroAlbert_32.mlpackage/Manifest.json", root: root))
     }
 
     func testUnsupportedLanguagesFailBeforeDownloading() async throws {
@@ -84,12 +149,32 @@ final class KokoroAneV3Tests: XCTestCase {
         XCTAssertEqual(total.vocoder, 5)
     }
 
+    /// Locally compiled stages under `fast/`, `decoder/` and `base/` that have
+    /// (or had) a source package; the published compiled bundles are excluded.
+    private func compiledStagesWithSource(under root: URL) throws -> [URL] {
+        var bundles: [URL] = []
+        for folder in ["fast", "decoder", "base"] {
+            let directory = root.appendingPathComponent(folder)
+            guard FileManager.default.fileExists(atPath: directory.path) else { continue }
+            bundles += try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+                .filter {
+                    $0.pathExtension == "mlmodelc" && KokoroAneV3Assets.isCompiledBundle(at: $0)
+                        && !["KokoroProsody_v2", "KokoroTail_v2"].contains($0.deletingPathExtension().lastPathComponent)
+                }
+        }
+        return bundles
+    }
+
+    private func sourcePackage(for compiled: URL) -> URL {
+        compiled.deletingPathExtension().appendingPathExtension("mlpackage")
+    }
+
     func testRealSDKInputsAndFallbacks() async throws {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["FLUIDAUDIO_RUN_KOKORO_V3"] == "1",
             "Explicitly enable the bounded real-model integration check")
         let directory = ProcessInfo.processInfo.environment["KOKORO_V3_TEST_CACHE"].map { URL(fileURLWithPath: $0) }
-        let english = KokoroAneManager(directory: directory, version: .v3)
+        let english = KokoroAneManager(directory: directory, computeUnits: Self.routing, version: .v3)
         let hello = "həlˈoʊ wˈɜːld"
         let fox = "ðə kwɪk bɹaʊn fɑːks dʒʌmps oʊvɚ ðə leɪzi dɑːɡ."
         var parts: [KokoroAneSynthesisResult] = []
@@ -123,11 +208,47 @@ final class KokoroAneV3Tests: XCTestCase {
         let reloaded = try await english.synthesizeFromPhonemesDetailed(hello)
         try check(reloaded, fast: true)
         XCTAssertEqual(try Data(contentsOf: vocabURL), vocabData)
+        // #1043: with every stage compiled, the .mlpackage sources are dead
+        // weight. Deleting them must not trigger a re-download on the next
+        // load, and synthesis must keep running from the compiled bundles.
+        // Idempotent: on a cache that was already stripped, this only checks
+        // that nothing comes back.
+        await english.cleanup()
+        let compiledStages = try compiledStagesWithSource(under: root)
+        XCTAssertFalse(compiledStages.isEmpty)
+        for bundle in compiledStages {
+            try? FileManager.default.removeItem(at: sourcePackage(for: bundle))
+        }
+        let afterRemoval = try await english.synthesizeFromPhonemesDetailed(hello)
+        try check(afterRemoval, fast: true)
+        for bundle in compiledStages {
+            XCTAssertFalse(
+                FileManager.default.fileExists(atPath: sourcePackage(for: bundle).path),
+                "\(bundle.lastPathComponent) source was re-downloaded although the compiled bundle exists")
+        }
+        // Recovery with the source gone: a compiled bundle that no longer
+        // loads is dropped, the load fails once, and the next load re-fetches
+        // and recompiles that stage's source.
+        await english.cleanup()
+        let damaged = root.appendingPathComponent("fast/KokoroAlbert_32.mlmodelc")
+        XCTAssertTrue(KokoroAneV3Assets.isCompiledBundle(at: damaged))
+        try Data("x".utf8).write(to: damaged.appendingPathComponent("coremldata.bin"), options: .atomic)
+        do {
+            _ = try await english.synthesizeFromPhonemesDetailed(hello)
+            XCTFail("Expected the damaged compiled bundle to fail to load")
+        } catch {
+            XCTAssertFalse(FileManager.default.fileExists(atPath: damaged.path), "damaged bundle must be dropped")
+        }
+        let recovered = try await english.synthesizeFromPhonemesDetailed(hello)
+        try check(recovered, fast: true)
+        XCTAssertTrue(KokoroAneV3Assets.isCompiledBundle(at: damaged))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sourcePackage(for: damaged).path))
         try await english.initialize()
         try check(try await english.synthesizeDetailed(text: "Hello world."), fast: true)
         await english.cleanup()
 
-        let japanese = KokoroAneManager(variant: .japanese, directory: directory, version: .v3)
+        let japanese = KokoroAneManager(
+            variant: .japanese, directory: directory, computeUnits: Self.routing, version: .v3)
         let ja = "koɲɲiʨiβa, sekai."
         try check(try await japanese.synthesizeFromPhonemesDetailed(ja), fast: true)
         try check(try await japanese.synthesizeFromPhonemesDetailed(ja, voice: "jm_kumo"), fast: true)
@@ -137,7 +258,8 @@ final class KokoroAneV3Tests: XCTestCase {
         XCTAssertEqual(japaneseText.normalizedText, "こんにちは、世界。")
         await japanese.cleanup()
 
-        let mandarin = KokoroAneManager(variant: .mandarin, directory: directory, version: .v3)
+        let mandarin = KokoroAneManager(
+            variant: .mandarin, directory: directory, computeUnits: Self.routing, version: .v3)
         let zh = "ㄋㄧ2ㄏㄠ3/ㄕ十4ㄐㄝ4."
         try check(try await mandarin.synthesizeFromPhonemesDetailed(zh), fast: true)
         try check(try await mandarin.synthesizeFromPhonemesDetailed(zh, voice: "zm_010"), fast: true)
@@ -147,10 +269,33 @@ final class KokoroAneV3Tests: XCTestCase {
                 Array(repeating: zh, count: 4).joined(separator: " "), speed: 0.7),
             fast: false)
         try check(try await mandarin.synthesizeDetailed(text: "你好世界。"), fast: true)
+        // A punctuation pause rewrites the 、 cluster (`,` + ` `) and silences it.
+        await mandarin.setPunctuationPauses(["、": .milliseconds(400)])
+        let paused = try await mandarin.synthesizeDetailed(text: "你好、世界。")
+        try check(paused, fast: true)
+        let comma = try XCTUnwrap(paused.inputIds.firstIndex(of: 3))
+        XCTAssertEqual(paused.predictedDurations[comma] + paused.predictedDurations[comma + 1], 16)
+        let start = (Int(paused.predictedDurations[..<comma].reduce(0, +)) + 1) * 600
+        let interior = paused.samples[start..<(start + 13 * 600)]
+        XCTAssertLessThan(interior.map { abs($0) }.max() ?? 1, 0.001)
         await mandarin.cleanup()
     }
 
+    /// The real-model test runs the OS default routing. Set
+    /// `KOKORO_V3_TEST_UNITS=aneTailGpu` or `aneTailCpu` to run the other one;
+    /// the GPU route aborts on some macOS 27.0.1 Macs (#1103).
+    private static var routing: KokoroAneComputeUnits {
+        switch ProcessInfo.processInfo.environment["KOKORO_V3_TEST_UNITS"] {
+        case "aneTailGpu": return .aneTailGpu
+        case "aneTailCpu": return .aneTailCpu
+        default: return .default
+        }
+    }
+
+    /// `fast`: the request fits a decoder bucket. The fast vocoder runs only
+    /// when the routing also allows it.
     private func check(_ result: KokoroAneSynthesisResult, fast: Bool) throws {
+        let fast = fast && KokoroAneV3Pipeline.usesFastVocoder(Self.routing)
         XCTAssertEqual(result.inputIds.count, result.encoderTokens)
         XCTAssertEqual(result.predictedDurations.count, result.inputIds.count)
         XCTAssertEqual(result.predictedDurations.reduce(0) { $0 + Int($1) }, result.acousticFrames)

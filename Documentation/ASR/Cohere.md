@@ -94,7 +94,17 @@ swift run -c release fluidaudiocli cohere-transcribe audio.wav \
     --decoder-dir /path/to/f16 \
     --vocab-dir /path/to/f16 \
     --language en
+
+# Opt the encoder into the GPU (fast, but ~10 GB of extra memory; see below)
+swift run -c release fluidaudiocli cohere-transcribe audio.wav \
+    --model-dir /path/to/q8 --language en \
+    --encoder-compute-units all
 ```
+
+`--compute-units`, `--encoder-compute-units` and `--decoder-compute-units`
+take `all | cpu-only | cpu-gpu | ane`; the per-model flags override the shared
+one. Both default to `ane`. `cohere-transcribe` prints the process footprint
+after loading and after transcribing so the cost of a choice is visible.
 
 ### Swift API
 
@@ -109,6 +119,8 @@ let models = try await CoherePipeline.loadModels(
     encoderDir: encoderDir,
     decoderDir: decoderDir,
     vocabDir: decoderDir
+    // encoderComputeUnits: .cpuAndNeuralEngine,  (default, see "Compute units")
+    // decoderComputeUnits: .cpuAndNeuralEngine   (default)
 )
 
 let pipeline = CoherePipeline()
@@ -127,8 +139,66 @@ and stitches the windows at the longest common token run inside the overlap.
 The seam is cut after the matched run on both sides, so neither window's copy
 of the overlap audio is emitted twice.
 
+Japanese and Chinese take a different path. There the sliding window lost a
+quarter of long read speech (#1140): a window that starts a few seconds into an
+utterance makes the model skip ahead to a later sentence and end early, and
+windows holding several sentences drop some (upstream PyTorch does the same on
+those windows). For these languages `transcribeLong` cuts the audio into
+non-overlapping chunks of at most 20 s, each ending at the quietest 100 ms of
+the 10 s before that limit, and joins the chunk texts. On FLEURS read speech
+joined into 2–3 minute files (4 files per language, with and without 0.5 s
+gaps), character error rate went from 20.0% / 15.8% to 3.8% / 7.9% for
+Japanese and from 26.9% / 15.5% to 11.9% / 12.2% for Chinese. The same cut
+did not help German or Spanish, whose long sentences get split, so the other
+languages keep the sliding window.
+
 `TranscriptionResult` also exposes `encoderSeconds`, `decoderSeconds`, and
 `totalSeconds` for per-stage profiling.
+
+## Compute units and memory
+
+`loadModels` resolves compute units per model: `encoderComputeUnits` /
+`decoderComputeUnits` win, then the shared `computeUnits`, then the
+defaults `CoherePipeline.defaultEncoderComputeUnits` and
+`defaultDecoderComputeUnits` (both `.cpuAndNeuralEngine`).
+`LoadedModels.encoderComputeUnits` / `decoderComputeUnits` report what was
+used.
+
+**Keep the INT8 encoder off the GPU unless you can spare ~10 GB.** Under
+`.all`, Core ML may route the encoder to the GPU, where the 1.8 GB of INT8
+weights are materialised at full precision on the first call
+([#1045](https://github.com/FluidInference/FluidAudio/issues/1045)). The
+Neural Engine runs it as INT8 and the footprint stays under 100 MB. The
+transcripts are identical; the GPU encoder is faster per window.
+
+Measured with the debug `cohere-transcribe --repeat 3` build on an M5 Pro
+(24 GB, macOS 27.0), INT8 encoder + FP16 v3 decoder, one 16.9 s English clip,
+fresh process per row. Footprint is `phys_footprint` (Xcode's memory gauge);
+max RSS is from `/usr/bin/time -l`. First-call times include the one-off
+per-process ANE/GPU setup; warm times are runs 2–3.
+
+| Encoder | Decoder | Footprint after load | Footprint after 3 calls | Max RSS | Encoder 1st call | Encoder warm | Decoder warm |
+|---|---|---:|---:|---:|---:|---:|---:|
+| `ane` (default) | `ane` (default) | 26 MB | 128 MB | 7.4 GB | 10.6 s | 1.15–1.23 s | 0.34 s |
+| `ane` | `all` | 20 MB | 226 MB | 7.8 GB | 1.7 s | 1.29 s | 0.32–0.34 s |
+| `all` | `all` (old default) | 24 MB | 1,066 MB | 11.6 GB | 78.9 s | 0.51 s | 0.30–0.34 s |
+| `all` | `ane` | 30 MB | 1,038 MB | 12.9 GB | 76.3 s | 0.49 s | 0.37 s |
+| `cpu-gpu` | `ane` | 23 MB | 1,048 MB | 12.1 GB | 77.5 s | 0.48–0.50 s | 0.37 s |
+
+With `all` or `cpu-gpu` the encoder lands on the GPU: the first call takes
+over a minute while the weights are materialised, and the process keeps
+~10 GB more resident than the ANE path. On this 24 GB host most of it shows
+up as max RSS with the footprint settling near 1 GB; the report in #1045
+(M5 Pro, 48 GB, macOS 26.6, v2 decoder) saw the same ~10 GB in the footprint
+itself, 12.4 GB after the first call. The decoder's placement moves the
+footprint by ~100 MB and its time by a few percent, so it follows the
+encoder onto the ANE by default.
+
+The encoder always processes the padded 35 s window (`[1, 128, 3500]`), so a
+7 s dictation pays the full window cost on every path; the ANE/GPU timing
+gap above is per window, not per second of audio. Pass
+`encoderComputeUnits: .all` (or `.cpuAndGPU`) for throughput-bound work on a
+machine with memory to spare; leave the default on 8–16 GB Macs and on iOS.
 
 ## Benchmarks
 

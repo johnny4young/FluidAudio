@@ -210,9 +210,20 @@ public actor PocketTtsSession {
     }
 
     /// Start the generation loop. Must be called once after init.
+    ///
+    /// The generation task retains the session until `generateLoop` returns
+    /// (after `finish()` or `cancel()`), so one-shot callers need not keep the
+    /// session alive while its frames stream is consumed. Owners of a
+    /// persistent session (`PocketTtsManager.makeSession`) must call
+    /// `finish()` or `cancel()` before dropping it: an abandoned session keeps
+    /// its models loaded and its task waiting for text until then.
     func start() {
-        generationTask = Task { [weak self] in
-            guard let self else { return }
+        // Strong capture on purpose: one-shot callers (synthesizeStreamingStateful)
+        // keep only `frames`, so the session can be released before this task
+        // body runs; a weak capture then returned without finishing the stream
+        // and the consumer waited forever. The task holds the session until the
+        // text stream is finished or `cancel()` is called.
+        generationTask = Task {
             await self.generateLoop()
         }
         frameContinuation.onTermination = { [weak self] _ in

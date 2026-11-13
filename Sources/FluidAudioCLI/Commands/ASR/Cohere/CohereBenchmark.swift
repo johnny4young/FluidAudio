@@ -48,13 +48,17 @@ enum CohereBenchmark {
         var maxTokens: Int?
         var repetitionPenalty: Float = 1.1
         var noRepeatNgram = 3
-        var computeUnits: MLComputeUnits = .all
+        var computeUnits = CohereComputeUnitsOption()
         var autoDownload = false
         var checkpointEvery = 100
 
         var i = 0
         while i < arguments.count {
             let arg = arguments[i]
+            if computeUnits.consume(arguments, at: &i, logger: logger) {
+                i += 1
+                continue
+            }
             switch arg {
             case "--encoder-dir":
                 if i + 1 < arguments.count {
@@ -123,10 +127,6 @@ enum CohereBenchmark {
                     subset = arguments[i + 1]
                     i += 1
                 }
-            case "--cpu-only":
-                computeUnits = .cpuOnly
-            case "--cpu-gpu":
-                computeUnits = .cpuAndGPU
             case "--auto-download":
                 autoDownload = true
             case "--checkpoint-every":
@@ -181,10 +181,16 @@ enum CohereBenchmark {
                 encoderDir: URL(fileURLWithPath: encDir),
                 decoderDir: URL(fileURLWithPath: decDir),
                 vocabDir: URL(fileURLWithPath: vocDir),
-                computeUnits: computeUnits
+                computeUnits: computeUnits.shared,
+                encoderComputeUnits: computeUnits.encoder,
+                decoderComputeUnits: computeUnits.decoder
             )
             logger.info(
                 "Models loaded in \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - loadStart))s")
+            logger.info(
+                "  Encoder compute:  \(CoherePipeline.describe(models.encoderComputeUnits))")
+            logger.info(
+                "  Decoder compute:  \(CoherePipeline.describe(models.decoderComputeUnits))")
 
             let pipeline = CoherePipeline()
 
@@ -707,10 +713,7 @@ enum CohereBenchmark {
                 --repetition-penalty <f>        CTRL-style penalty, 1.0 disables (default: 1.1)
                 --no-repeat-ngram <n>           Forbid repeating n-grams, 0 disables (default: 3)
 
-            Compute units:
-                --cpu-only                      Force CPU
-                --cpu-gpu                       CPU + GPU (skip ANE)
-                (default: all, includes ANE)
+            \(CohereComputeUnitsOption.usage)
 
             Output:
                 --output <file>                 JSON report path
@@ -726,7 +729,8 @@ enum CohereBenchmark {
                 The Cohere encoder accepts a 35s window. Audio longer than 35s is
                 automatically chunked with 5s overlap (matching upstream
                 `overlap_chunk_second: 5`) and adjacent chunks are stitched via
-                token-level longest-common-substring merge.
+                token-level longest-common-substring merge. Japanese and Chinese
+                audio is instead cut at pauses into chunks of at most 20s.
 
             Examples:
                 # LibriSpeech test-clean, English, 100 utterances
