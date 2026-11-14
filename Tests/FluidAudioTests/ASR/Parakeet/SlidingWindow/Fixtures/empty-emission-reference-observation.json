@@ -1,0 +1,490 @@
+{
+  "base_revision": "ef2613d8bcbb0312f636dd5763163350fd0e22da",
+  "equivalent_tree_pin": "16ff239818ddb6787629dab38ae43e8bdd0e7546",
+  "engine": "Parakeet v3 int8, local pre-existing artifacts",
+  "model_components": {
+    "Decoder.mlmodelc/weights/weight.bin": {
+      "bytes": 23604992,
+      "sha256": "48adf0f0d47c406c8253d4f7fef967436a39da14f5a65e66d5a4b407be355d41"
+    },
+    "Encoder.mlmodelc/weights/weight.bin": {
+      "bytes": 445187200,
+      "sha256": "e2020f323703477a5b21d7c2d282c403e371afb5962e79877e3033e73ba6f421"
+    },
+    "JointDecisionv3.mlmodelc/weights/weight.bin": {
+      "bytes": 12642764,
+      "sha256": "4e0e63d840032f7f07ddb1d64446051166281e5491bf22da8a945c41f6eedb3e"
+    },
+    "Preprocessor.mlmodelc/weights/weight.bin": {
+      "bytes": 491072,
+      "sha256": "129b76e3aeafa8afa3ea76d995b964b145fe83700d579f6ff42c4c38fa0968ea"
+    },
+    "parakeet_vocab.json": {
+      "bytes": 151122,
+      "sha256": "7ec60e05f1b24480736ec0eed40900f4626bce1fa9a60fd700ec7e2a59198735"
+    }
+  },
+  "configuration": {
+    "chunk_seconds": 1,
+    "left_seconds": 11,
+    "right_seconds": 0.4,
+    "hypothesis_seconds": 1,
+    "min_context_seconds": 10,
+    "confirmation_threshold": 0.8,
+    "transport_frames": 1600,
+    "sample_rate": 16000,
+    "language_hint": null,
+    "glossary": false
+  },
+  "hardware": {
+    "chip": "Apple M3 Pro",
+    "RAM_GiB": 18,
+    "OS": "27.0.1",
+    "Swift": "6.4",
+    "build": "debug"
+  },
+  "cases": [
+    {
+      "case_id": "dral-es-008-18",
+      "group": "public",
+      "same_normalized_final": true,
+      "same_raw_final": true,
+      "interior_token_contract_equal": true,
+      "word_counts": {
+        "before": 7,
+        "after": 7
+      },
+      "first_nonempty_seconds": {
+        "before": 1.49028775,
+        "after": 1.499536166
+      },
+      "finish_seconds": {
+        "before": 0.14938775,
+        "after": 0.126425791
+      },
+      "own_CPU_seconds": {
+        "before": 0.25002800000000003,
+        "after": 0.22629999999999995
+      },
+      "terminal_after_eof_seconds": {
+        "before": 0.14934112499999985,
+        "after": 0.12640404199999988
+      },
+      "lineage_valid": true,
+      "source_reference_diagnostic_WER": {
+        "before": {
+          "reference_words": 7,
+          "hypothesis_words": 7,
+          "substitutions": 0,
+          "deletions": 0,
+          "insertions": 0,
+          "errors": 0,
+          "wer": 0.0,
+          "empty_reference_insertions": null
+        },
+        "after": {
+          "reference_words": 7,
+          "hypothesis_words": 7,
+          "substitutions": 0,
+          "deletions": 0,
+          "insertions": 0,
+          "errors": 0,
+          "wer": 0.0,
+          "empty_reference_insertions": null
+        }
+      },
+      "source_reported_venir_occurrences": {
+        "before": 2,
+        "after": 2
+      }
+    },
+    {
+      "case_id": "dral-en-008-18",
+      "group": "public",
+      "same_normalized_final": true,
+      "same_raw_final": true,
+      "interior_token_contract_equal": true,
+      "word_counts": {
+        "before": 6,
+        "after": 6
+      },
+      "first_nonempty_seconds": {
+        "before": 1.479300792,
+        "after": 1.466925125
+      },
+      "finish_seconds": {
+        "before": 0.058829084,
+        "after": 0.064563417
+      },
+      "own_CPU_seconds": {
+        "before": 0.12389099999999997,
+        "after": 0.13247799999999987
+      },
+      "terminal_after_eof_seconds": {
+        "before": 0.05883879100000011,
+        "after": 0.06457858300000008
+      },
+      "lineage_valid": true
+    },
+    {
+      "case_id": "dral-es-008-18-context",
+      "group": "public",
+      "same_normalized_final": true,
+      "same_raw_final": true,
+      "interior_token_contract_equal": true,
+      "word_counts": {
+        "before": 17,
+        "after": 17
+      },
+      "first_nonempty_seconds": {
+        "before": 3.471696209,
+        "after": 3.44695225
+      },
+      "finish_seconds": {
+        "before": 0.208906333,
+        "after": 0.177103834
+      },
+      "own_CPU_seconds": {
+        "before": 1.404485,
+        "after": 1.05119
+      },
+      "terminal_after_eof_seconds": {
+        "before": 0.20890341699999837,
+        "after": 0.1771047499999998
+      },
+      "lineage_valid": true
+    },
+    {
+      "case_id": "dral-en-006-29-context",
+      "group": "public",
+      "same_normalized_final": true,
+      "same_raw_final": true,
+      "interior_token_contract_equal": true,
+      "word_counts": {
+        "before": 14,
+        "after": 14
+      },
+      "first_nonempty_seconds": {
+        "before": 1.464972666,
+        "after": 1.471352833
+      },
+      "finish_seconds": {
+        "before": 0.106863917,
+        "after": 0.113010542
+      },
+      "own_CPU_seconds": {
+        "before": 0.7151289999999997,
+        "after": 0.7129660000000002
+      },
+      "terminal_after_eof_seconds": {
+        "before": 0.10686491600000014,
+        "after": 0.11300729199999981
+      },
+      "lineage_valid": true
+    },
+    {
+      "case_id": "dral-es-006-29",
+      "group": "public",
+      "same_normalized_final": true,
+      "same_raw_final": true,
+      "interior_token_contract_equal": true,
+      "word_counts": {
+        "before": 1,
+        "after": 1
+      },
+      "first_nonempty_seconds": {
+        "before": 1.254076584,
+        "after": 1.247828
+      },
+      "finish_seconds": {
+        "before": 0.112492667,
+        "after": 0.106506958
+      },
+      "own_CPU_seconds": {
+        "before": 0.08977099999999982,
+        "after": 0.07425900000000007
+      },
+      "terminal_after_eof_seconds": {
+        "before": 0.11249083300000007,
+        "after": 0.10650137500000012
+      },
+      "lineage_valid": true,
+      "source_reference_diagnostic_WER": {
+        "before": {
+          "reference_words": 1,
+          "hypothesis_words": 1,
+          "substitutions": 0,
+          "deletions": 0,
+          "insertions": 0,
+          "errors": 0,
+          "wer": 0.0,
+          "empty_reference_insertions": null
+        },
+        "after": {
+          "reference_words": 1,
+          "hypothesis_words": 1,
+          "substitutions": 0,
+          "deletions": 0,
+          "insertions": 0,
+          "errors": 0,
+          "wer": 0.0,
+          "empty_reference_insertions": null
+        }
+      }
+    },
+    {
+      "case_id": "dral-es-002-3-34",
+      "group": "public",
+      "same_normalized_final": false,
+      "same_raw_final": false,
+      "interior_token_contract_equal": true,
+      "word_counts": {
+        "before": 3,
+        "after": 10
+      },
+      "first_nonempty_seconds": {
+        "before": 3.153764542,
+        "after": 3.098782083
+      },
+      "finish_seconds": {
+        "before": 0.152970291,
+        "after": 0.090791083
+      },
+      "own_CPU_seconds": {
+        "before": 0.19798800000000005,
+        "after": 0.256383
+      },
+      "terminal_after_eof_seconds": {
+        "before": 0.15298137499999998,
+        "after": 0.09079091699999964
+      },
+      "lineage_valid": true,
+      "source_reference_diagnostic_WER": {
+        "before": {
+          "reference_words": 10,
+          "hypothesis_words": 3,
+          "substitutions": 0,
+          "deletions": 7,
+          "insertions": 0,
+          "errors": 7,
+          "wer": 0.7,
+          "empty_reference_insertions": null
+        },
+        "after": {
+          "reference_words": 10,
+          "hypothesis_words": 10,
+          "substitutions": 0,
+          "deletions": 0,
+          "insertions": 0,
+          "errors": 0,
+          "wer": 0.0,
+          "empty_reference_insertions": null
+        }
+      }
+    },
+    {
+      "case_id": "dral-en-002-4-34",
+      "group": "public",
+      "same_normalized_final": true,
+      "same_raw_final": true,
+      "interior_token_contract_equal": true,
+      "word_counts": {
+        "before": 11,
+        "after": 11
+      },
+      "first_nonempty_seconds": {
+        "before": 1.487511542,
+        "after": 1.471182958
+      },
+      "finish_seconds": {
+        "before": 0.075315542,
+        "after": 0.067248542
+      },
+      "own_CPU_seconds": {
+        "before": 0.24954199999999993,
+        "after": 0.2202270000000004
+      },
+      "terminal_after_eof_seconds": {
+        "before": 0.07532316700000008,
+        "after": 0.06724716700000011
+      },
+      "lineage_valid": true,
+      "source_reference_diagnostic_WER": {
+        "before": {
+          "reference_words": 11,
+          "hypothesis_words": 11,
+          "substitutions": 0,
+          "deletions": 0,
+          "insertions": 0,
+          "errors": 0,
+          "wer": 0.0,
+          "empty_reference_insertions": null
+        },
+        "after": {
+          "reference_words": 11,
+          "hypothesis_words": 11,
+          "substitutions": 0,
+          "deletions": 0,
+          "insertions": 0,
+          "errors": 0,
+          "wer": 0.0,
+          "empty_reference_insertions": null
+        }
+      }
+    },
+    {
+      "case_id": "dral-es-002-3-34-context",
+      "group": "public",
+      "same_normalized_final": true,
+      "same_raw_final": true,
+      "interior_token_contract_equal": true,
+      "word_counts": {
+        "before": 43,
+        "after": 43
+      },
+      "first_nonempty_seconds": {
+        "before": 1.479969708,
+        "after": 1.470174125
+      },
+      "finish_seconds": {
+        "before": 0.102506459,
+        "after": 0.122670416
+      },
+      "own_CPU_seconds": {
+        "before": 4.383849,
+        "after": 3.929232999999999
+      },
+      "terminal_after_eof_seconds": {
+        "before": 0.10250583399999869,
+        "after": 0.12266641699999781
+      },
+      "lineage_valid": true
+    },
+    {
+      "case_id": "es-payment-negation.clean",
+      "group": "synthetic",
+      "same_normalized_final": true,
+      "same_raw_final": true,
+      "interior_token_contract_equal": true,
+      "word_counts": {
+        "before": 11,
+        "after": 11
+      },
+      "first_nonempty_seconds": {
+        "before": 1.490619334,
+        "after": 1.484332875
+      },
+      "finish_seconds": {
+        "before": 0.142792167,
+        "after": 0.152193083
+      },
+      "own_CPU_seconds": {
+        "before": 0.32129300000000005,
+        "after": 0.338113
+      },
+      "terminal_after_eof_seconds": {
+        "before": 0.14278958300000033,
+        "after": 0.1521714580000002
+      },
+      "lineage_valid": true
+    },
+    {
+      "case_id": "en-payment-negation.clean",
+      "group": "synthetic",
+      "same_normalized_final": true,
+      "same_raw_final": true,
+      "interior_token_contract_equal": true,
+      "word_counts": {
+        "before": 9,
+        "after": 9
+      },
+      "first_nonempty_seconds": {
+        "before": 1.473573,
+        "after": 1.478236584
+      },
+      "finish_seconds": {
+        "before": 0.125455334,
+        "after": 0.131052791
+      },
+      "own_CPU_seconds": {
+        "before": 0.257811,
+        "after": 0.281273
+      },
+      "terminal_after_eof_seconds": {
+        "before": 0.12544616700000022,
+        "after": 0.13104291699999981
+      },
+      "lineage_valid": true
+    },
+    {
+      "case_id": "es-decimal-contrast.clean",
+      "group": "synthetic",
+      "same_normalized_final": true,
+      "same_raw_final": true,
+      "interior_token_contract_equal": true,
+      "word_counts": {
+        "before": 8,
+        "after": 8
+      },
+      "first_nonempty_seconds": {
+        "before": 1.470899583,
+        "after": 1.473951166
+      },
+      "finish_seconds": {
+        "before": 0.149507209,
+        "after": 0.1320745
+      },
+      "own_CPU_seconds": {
+        "before": 0.35872100000000007,
+        "after": 0.3975540000000001
+      },
+      "terminal_after_eof_seconds": {
+        "before": 0.14950637499999964,
+        "after": 0.13206787499999972
+      },
+      "lineage_valid": true
+    },
+    {
+      "case_id": "non-speech-silence.long-tail",
+      "group": "synthetic",
+      "same_normalized_final": true,
+      "same_raw_final": true,
+      "interior_token_contract_equal": true,
+      "word_counts": {
+        "before": 2,
+        "after": 2
+      },
+      "first_nonempty_seconds": {
+        "before": 1.445742875,
+        "after": 1.467983416
+      },
+      "finish_seconds": {
+        "before": 0.050463584,
+        "after": 0.069187375
+      },
+      "own_CPU_seconds": {
+        "before": 0.11125300000000005,
+        "after": 0.17507000000000006
+      },
+      "terminal_after_eof_seconds": {
+        "before": 0.0504800409999997,
+        "after": 0.06921749999999971
+      },
+      "lineage_valid": true
+    }
+  ],
+  "fixture_families": 3,
+  "synthetic_support_cases": 4,
+  "local_human_acoustic_reference_audit": false,
+  "confidence_intervals": null,
+  "population_quality_qualified": false,
+  "full_product_pipeline_tested": false,
+  "unit_tests": {
+    "before": 5,
+    "intended_failures_before": 2,
+    "after_pure": 5,
+    "after_audio": 1,
+    "failures_after": 0
+  },
+  "silence_fixed": false
+}

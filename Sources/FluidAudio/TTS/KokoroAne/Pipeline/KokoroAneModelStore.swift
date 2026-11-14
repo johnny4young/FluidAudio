@@ -189,17 +189,26 @@ public actor KokoroAneModelStore {
     public nonisolated let directory: URL?
     private let computeUnits: KokoroAneComputeUnits
     private let variant: KokoroAneVariant
+    private let vocoderPrecision: KokoroAneVocoderPrecision
 
     public init(
         directory: URL? = nil,
         computeUnits: KokoroAneComputeUnits = .default,
         variant: KokoroAneVariant = .english,
-        version: KokoroAneVersion = .legacy
+        version: KokoroAneVersion = .legacy,
+        vocoderPrecision: KokoroAneVocoderPrecision = .float16
     ) {
         self.version = version
         self.directory = directory
         self.computeUnits = computeUnits
         self.variant = variant
+        self.vocoderPrecision = vocoderPrecision
+    }
+
+    /// Bundle a legacy stage loads from: the opt-in fp32 Vocoder replaces the
+    /// default one (#1135); every other stage uses ``KokoroAneStage/bundleName``.
+    static func bundleName(for stage: KokoroAneStage, vocoderPrecision: KokoroAneVocoderPrecision) -> String {
+        stage == .vocoder && vocoderPrecision == .float32 ? ModelNames.KokoroAne.vocoderFloat32 : stage.bundleName
     }
 
     /// Download (if missing), load all 7 mlmodelcs, parse vocab + default voice.
@@ -223,18 +232,24 @@ public actor KokoroAneModelStore {
                 throw KokoroAneError.inputProcessingFailed("ANE-v3 requires macOS 15 / iOS 18 or newer")
             }
             try KokoroAneV3Assets.validateVariant(variant)
-            guard computeUnits == .default || computeUnits == .aneTailGpu else {
-                throw KokoroAneError.inputProcessingFailed(
-                    "ANE-v3 uses its validated hybrid ANE/GPU routing; use default compute units")
+            guard vocoderPrecision == .float16 else {
+                throw KokoroAneError.inputProcessingFailed("ANE-v3 does not support the fp32 vocoder yet (#1135)")
             }
-            let root = try await KokoroAneV3Assets.ensure(variant: variant, directory: directory)
+            guard [.default, .aneTailGpu, .aneTailCpu].contains(computeUnits) else {
+                throw KokoroAneError.inputProcessingFailed(
+                    "ANE-v3 supports the default, aneTailGpu or aneTailCpu routing only")
+            }
+            let root = try await KokoroAneV3Assets.ensure(
+                variant: variant, directory: directory,
+                fastVocoder: KokoroAneV3Pipeline.usesFastVocoder(computeUnits))
             let loadedVocab = try KokoroAneVocab.load(from: root.appendingPathComponent("vocab.json"))
             let voiceURL = try await KokoroAneV3Assets.ensureVoice(variant.defaultVoice, variant: variant, root: root)
             let defaultPack = try KokoroAneVoicePack.load(from: voiceURL)
             let pipeline = try KokoroAneV3Pipeline(
                 baseDirectory: root.appendingPathComponent("base"),
                 fastDirectory: root.appendingPathComponent("fast"),
-                decoderDirectory: root.appendingPathComponent("decoder"))
+                decoderDirectory: root.appendingPathComponent("decoder"),
+                computeUnits: computeUnits)
             try Task.checkCancellation()
             v3Pipeline = pipeline
             vocab = loadedVocab
@@ -244,16 +259,18 @@ public actor KokoroAneModelStore {
         }
 
         let repoDir = try await KokoroAneResourceDownloader.ensureModels(
-            variant: variant, directory: directory)
+            variant: variant, directory: directory,
+            additionalModelNames: vocoderPrecision == .float32 ? [ModelNames.KokoroAne.vocoderFloat32] : [])
 
         logger.info("Loading 7 KokoroAne CoreML models from \(repoDir.path)...")
         let loadStart = Date()
 
         var pendingModels: [KokoroAneStage: MLModel] = [:]
         for stage in KokoroAneStage.allCases {
-            let url = repoDir.appendingPathComponent(stage.bundleName)
+            let bundleName = Self.bundleName(for: stage, vocoderPrecision: vocoderPrecision)
+            let url = repoDir.appendingPathComponent(bundleName)
             guard FileManager.default.fileExists(atPath: url.path) else {
-                throw KokoroAneError.modelNotLoaded(stage.bundleName)
+                throw KokoroAneError.modelNotLoaded(bundleName)
             }
             let cfg = MLModelConfiguration()
             cfg.computeUnits = computeUnits.units(for: stage)
@@ -286,10 +303,12 @@ public actor KokoroAneModelStore {
     }
 
     func synthesizeV3(
-        inputIds: [Int32], styleS: [Float], styleTimbre: [Float], speed: Float
+        inputIds: [Int32], styleS: [Float], styleTimbre: [Float], speed: Float,
+        pauses: [KokoroAnePauses.Span] = []
     ) throws -> KokoroAneSynthesisResult {
         guard let pipeline = v3Pipeline else { throw KokoroAneError.modelNotLoaded("ANE-v3") }
-        let result = try pipeline.synthesize(inputIds: inputIds, style: styleTimbre + styleS, speed: speed)
+        let result = try pipeline.synthesize(
+            inputIds: inputIds, style: styleTimbre + styleS, speed: speed, pauses: pauses)
         let stages = result.stageMilliseconds
         var timings = KokoroAneStageTimings()
         timings.albert = stages.filter { $0.key == "Albert" || $0.key.hasPrefix("Albert_") }.values.reduce(0, +)
@@ -491,12 +510,19 @@ public actor KokoroAneModelStore {
             let tokenizer = try MandarinBertTokenizer.load(vocabURL: vocabURL)
             let catalog = try MandarinPolyphoneCatalog.load(fileURL: polyURL)
             let config = MLModelConfiguration()
-            config.computeUnits = .cpuAndNeuralEngine
+            // CPU only: the masked-softmax tail of this bundle comes back
+            // unnormalised on the ANE (candidate mass ≈ 0.01 instead of
+            // 1) and the GPU path pays a ~2.5 s per-process compile.
+            // fp32 CPU is exact at ~47 ms per polyphone query.
+            config.computeUnits = .cpuOnly
             let model = try MLModel(contentsOf: modelURL, configuration: config)
-            return MandarinG2pwModel(
+            return try MandarinG2pwModel(
                 model: model, tokenizer: tokenizer, catalog: catalog)
         } catch {
-            logger.info(
+            // Assets are on disk but unusable — louder than the
+            // missing-asset case so a stale bundle doesn't hide behind
+            // the dict fallback.
+            logger.warning(
                 "g2pW load failed (\(error.localizedDescription)) — "
                     + "Mandarin G2P will run dict-only")
             return nil

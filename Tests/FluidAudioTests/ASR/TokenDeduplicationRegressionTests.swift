@@ -492,7 +492,7 @@ final class TokenDeduplicationRegressionTests: XCTestCase {
         XCTAssertEqual(interior.emitTokensAfterFrame, 104 - 62 - AsrManager.redecodeEmissionJitterFrames)
     }
 
-    func testRedecodePlan_InactiveWithoutPreviousTokensOrTimestamps() {
+    func testRedecodePlan_DistinguishesFirstWindowFromEmptyFinalRedecode() {
         let legacy = AsrManager.redecodePlan(
             redecode: false,
             previousTokens: [1, 2],
@@ -509,14 +509,27 @@ final class TokenDeduplicationRegressionTests: XCTestCase {
             globalFrameOffset: 0
         )
         XCTAssertNil(noTimestamps.initialTimeIndexOverride, "Batch callers (no timestamps) keep legacy navigation")
+        XCTAssertNil(noTimestamps.emitTokensAfterFrame)
 
         let firstWindow = AsrManager.redecodePlan(
+            redecode: false,
+            previousTokens: [],
+            previousTokenTimestamps: [],
+            globalFrameOffset: 0
+        )
+        XCTAssertNil(firstWindow.initialTimeIndexOverride, "A first window keeps normal navigation")
+        XCTAssertNil(firstWindow.emitTokensAfterFrame)
+
+        let emptyFinalWindow = AsrManager.redecodePlan(
             redecode: true,
             previousTokens: [],
             previousTokenTimestamps: [],
             globalFrameOffset: 0
         )
-        XCTAssertNil(firstWindow.initialTimeIndexOverride, "Single-window streams have nothing to re-decode")
+        XCTAssertEqual(
+            emptyFinalWindow.initialTimeIndexOverride, 0,
+            "An EOF re-decode must reset navigation advanced by token-empty windows")
+        XCTAssertNil(emptyFinalWindow.emitTokensAfterFrame, "No emitted prefix needs suppression")
     }
 
     /// Clip 03 at chunk 9 (#897): the re-decode after the seam reads `and the
@@ -613,6 +626,52 @@ final class TokenDeduplicationRegressionTests: XCTestCase {
         )
         XCTAssertLessThanOrEqual(seam.droppedPrevious, previousPieces.count - 2)
         XCTAssertLessThan(seam.droppedCurrent, 3, "the new word after the seam is kept")
+    }
+
+    /// The floor splits `▁it ' s` after a stable `▁it`, and the re-decode emits the
+    /// whole word again. Its copy of `▁it` goes before reconciliation, so the
+    /// stable prefix is not repeated: `say it's now`, never `say it it's now`.
+    func testFullWordReemissionAcrossAMidWordFloorKeepsTheStablePrefixOnce() {
+        let previousTokens = [1, 2, 3, 4]
+        let previousTimestamps = [10, 20, 25, 28]
+        let previousPieces = ["▁say", "▁it", "'", "s"]
+        var currentTokens = [2, 3, 4, 5]
+        var currentTimestamps = [20, 25, 28, 40]
+        var currentPieces = ["▁it", "'", "s", "▁now"]
+        let flooredStart = AsrManager.redecodeWordStart(pieces: previousPieces, stableTokenFloor: 2)
+        XCTAssertEqual(flooredStart, 2)
+
+        let copy = AsrManager.reemittedStableWordHead(
+            previousTokens: previousTokens, previousTimestamps: previousTimestamps,
+            wordStart: 1, flooredStart: 2,
+            currentTokens: currentTokens, currentTimestamps: currentTimestamps)
+        XCTAssertEqual(copy, 1)
+        currentTokens.removeFirst(copy)
+        currentTimestamps.removeFirst(copy)
+        currentPieces.removeFirst(copy)
+
+        let seam = AsrManager.reconcileFinalWindowSeam(
+            previousTokens: previousTokens, previousTimestamps: previousTimestamps,
+            trailingWordStart: 2, currentTokens: currentTokens, currentTimestamps: currentTimestamps,
+            currentPieces: currentPieces, previousPieces: previousPieces)
+        let merged =
+            Array(previousPieces.dropLast(seam.droppedPrevious))
+            + Array(currentPieces.dropFirst(seam.droppedCurrent))
+        XCTAssertEqual(merged, ["▁say", "▁it", "'", "s", "▁now"])
+        XCTAssertGreaterThanOrEqual(previousPieces.count - seam.droppedPrevious, 2, "the stable prefix stays")
+    }
+
+    /// Only an exact, in-place copy of the stable part is removed.
+    func testStableWordHeadNeedsTheSameTokensAtTheSameFrames() {
+        func head(_ tokens: [Int], _ frames: [Int], wordStart: Int = 1) -> Int {
+            AsrManager.reemittedStableWordHead(
+                previousTokens: [1, 2, 3, 4], previousTimestamps: [10, 20, 25, 28],
+                wordStart: wordStart, flooredStart: 2, currentTokens: tokens, currentTimestamps: frames)
+        }
+        XCTAssertEqual(head([2, 3], [20, 25]), 1)
+        XCTAssertEqual(head([9, 3], [20, 25]), 0, "a different word is new speech")
+        XCTAssertEqual(head([2, 3], [90, 95]), 0, "a later `it` is a real repetition")
+        XCTAssertEqual(head([2, 3], [20, 25], wordStart: 2), 0, "no split word, nothing to remove")
     }
 
     /// Clip 03 of the #855 fixtures: previous `▁c ode ▁and ▁an`, re-decode

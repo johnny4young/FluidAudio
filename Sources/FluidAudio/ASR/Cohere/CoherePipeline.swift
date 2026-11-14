@@ -342,6 +342,10 @@ public actor CoherePipeline {
         public let cacheLength: Int
         /// Element type the decoder was compiled with for its caches and masks.
         public let cacheDataType: MLMultiArrayDataType
+        /// Compute units the encoder was loaded with.
+        public let encoderComputeUnits: MLComputeUnits
+        /// Compute units the decoder was loaded with.
+        public let decoderComputeUnits: MLComputeUnits
     }
 
     private let melExtractor: CohereMelSpectrogram
@@ -385,6 +389,27 @@ public actor CoherePipeline {
         }
     }
 
+    /// Compute units the encoder loads with unless the caller picks some.
+    ///
+    /// The INT8 encoder stays INT8 on the Neural Engine. Under `.all`,
+    /// Core ML may route it to the GPU instead, where the 1.8 GB of INT8
+    /// weights are materialised at full precision: the process keeps ~10 GB
+    /// more memory resident after the first `transcribe` (12.4 GB footprint
+    /// in #1045, M5 Pro, macOS 26.6) and that first call takes over a
+    /// minute. On the ANE the footprint stays near 130 MB for the whole
+    /// run, at the cost of a slower warm encoder (~1.2 s vs ~0.5 s per 35 s
+    /// window on M5 Pro). Pass `encoderComputeUnits: .all` or `.cpuAndGPU`
+    /// to opt into the GPU on machines that can afford the memory. See
+    /// Documentation/ASR/Cohere.md, "Compute units and memory".
+    public static let defaultEncoderComputeUnits: MLComputeUnits = .cpuAndNeuralEngine
+
+    /// Compute units the decoder loads with unless the caller picks some.
+    ///
+    /// The FP16 cache-external decoder is 291 MB and ANE-resident with its
+    /// static shapes. Moving it to `.all` changes its time by a few percent
+    /// and adds ~100 MB, so it shares the encoder's default.
+    public static let defaultDecoderComputeUnits: MLComputeUnits = .cpuAndNeuralEngine
+
     /// Load encoder, decoder and vocabulary from (potentially different) directories.
     ///
     /// This supports mixed-precision — e.g. INT8 encoder + FP16 decoder. Pass
@@ -396,15 +421,27 @@ public actor CoherePipeline {
     /// static build and `.v1` the legacy FP16 dynamic-shape decoder. The
     /// runtime reads the cache length from the loaded model and adapts the
     /// `attention_mask` build to whichever variant is loaded.
+    ///
+    /// Compute units are resolved per model: `encoderComputeUnits` /
+    /// `decoderComputeUnits` win, then the shared `computeUnits`, then
+    /// `defaultEncoderComputeUnits` / `defaultDecoderComputeUnits` (both
+    /// `.cpuAndNeuralEngine`). Keep the encoder off the GPU unless you can
+    /// spare ~10 GB; see `defaultEncoderComputeUnits`.
     public static func loadModels(
         encoderDir: URL,
         decoderDir: URL,
         vocabDir: URL,
         decoderVariant: DecoderVariant = .v3,
-        computeUnits: MLComputeUnits = .all
+        computeUnits: MLComputeUnits? = nil,
+        encoderComputeUnits: MLComputeUnits? = nil,
+        decoderComputeUnits: MLComputeUnits? = nil
     ) async throws -> LoadedModels {
-        let config = MLModelConfiguration()
-        config.computeUnits = computeUnits
+        let units = resolveComputeUnits(
+            shared: computeUnits, encoder: encoderComputeUnits, decoder: decoderComputeUnits)
+        let encoderConfig = MLModelConfiguration()
+        encoderConfig.computeUnits = units.encoder
+        let decoderConfig = MLModelConfiguration()
+        decoderConfig.computeUnits = units.decoder
 
         let encoderURL = encoderDir.appendingPathComponent(
             ModelNames.CohereTranscribe.encoderCompiledFile)
@@ -415,10 +452,12 @@ public actor CoherePipeline {
                 "Decoder not found at \(decoderURL.path) (variant: \(decoderVariant)).")
         }
 
-        pipelineLogger.info("Loading encoder from \(encoderURL.path)")
-        let encoder = try await MLModel.load(contentsOf: encoderURL, configuration: config)
-        pipelineLogger.info("Loading decoder from \(decoderURL.path)")
-        let decoder = try await MLModel.load(contentsOf: decoderURL, configuration: config)
+        pipelineLogger.info(
+            "Loading encoder from \(encoderURL.path) (\(describe(units.encoder)))")
+        let encoder = try await MLModel.load(contentsOf: encoderURL, configuration: encoderConfig)
+        pipelineLogger.info(
+            "Loading decoder from \(decoderURL.path) (\(describe(units.decoder)))")
+        let decoder = try await MLModel.load(contentsOf: decoderURL, configuration: decoderConfig)
 
         let cacheLength = try Self.probeCacheLength(
             decoder: decoder, variant: decoderVariant, path: decoderURL.path)
@@ -434,7 +473,31 @@ public actor CoherePipeline {
             vocabulary: vocab,
             decoderVariant: decoderVariant,
             cacheLength: cacheLength,
-            cacheDataType: cacheDataType)
+            cacheDataType: cacheDataType,
+            encoderComputeUnits: units.encoder,
+            decoderComputeUnits: units.decoder)
+    }
+
+    /// Per-model compute units for `loadModels`: the per-model value wins,
+    /// then the shared value, then the model's default.
+    static func resolveComputeUnits(
+        shared: MLComputeUnits?, encoder: MLComputeUnits?, decoder: MLComputeUnits?
+    ) -> (encoder: MLComputeUnits, decoder: MLComputeUnits) {
+        return (
+            encoder: encoder ?? shared ?? defaultEncoderComputeUnits,
+            decoder: decoder ?? shared ?? defaultDecoderComputeUnits
+        )
+    }
+
+    /// Log label for a compute-unit choice.
+    public static func describe(_ units: MLComputeUnits) -> String {
+        switch units {
+        case .cpuOnly: return "cpu-only"
+        case .cpuAndGPU: return "cpu-gpu"
+        case .cpuAndNeuralEngine: return "cpu-ane"
+        case .all: return "all"
+        @unknown default: return "unknown"
+        }
     }
 
     /// Read the KV-cache length from the decoder's `k_cache_0` input shape
@@ -631,6 +694,11 @@ public actor CoherePipeline {
     /// Mirrors the upstream Python pipeline's `overlap_chunk_second: 5`. No
     /// model changes — the encoder still sees a fixed `[1, 128, 3500]` mel and
     /// the decoder cache is reset per chunk.
+    ///
+    /// Languages written without spaces (Japanese, Chinese) take a different
+    /// path: the audio is cut into non-overlapping chunks of at most
+    /// `pauseChunkSeconds` that start and end at pauses, and the chunk texts
+    /// are joined. The sliding window loses whole sentences there (#1140).
     public func transcribeLong(
         audio: [Float],
         models: LoadedModels,
@@ -654,6 +722,17 @@ public actor CoherePipeline {
                 maxNewTokens: maxNewTokens,
                 repetitionPenalty: repetitionPenalty,
                 noRepeatNgram: noRepeatNgram)
+        }
+
+        if language.writesWithoutSpaces {
+            return try await transcribePauseChunks(
+                audio: audio,
+                models: models,
+                language: language,
+                maxNewTokens: maxNewTokens,
+                repetitionPenalty: repetitionPenalty,
+                noRepeatNgram: noRepeatNgram,
+                startTime: total0)
         }
 
         var mergedTokens: [Int] = []
@@ -705,6 +784,128 @@ public actor CoherePipeline {
             decoderSeconds: decoderSecs,
             totalSeconds: CFAbsoluteTimeGetCurrent() - total0,
             cappedWindows: cappedWindows)
+    }
+
+    /// Long-form path for languages written without spaces: decode
+    /// non-overlapping chunks that start and end at pauses, and join their
+    /// texts with no separator.
+    ///
+    /// The 35 s sliding window loses whole sentences of Japanese read speech:
+    /// a window that starts a few seconds into an utterance makes the decoder
+    /// skip ahead to a later sentence and stop, and windows holding several
+    /// sentences drop some. Upstream PyTorch does the same on those windows.
+    /// Chunks of at most `pauseChunkSeconds` cut at the quietest point of the
+    /// `pauseSearchSeconds` before that limit keep almost every sentence (#1140).
+    private func transcribePauseChunks(
+        audio: [Float],
+        models: LoadedModels,
+        language: CohereAsrConfig.Language,
+        maxNewTokens: Int?,
+        repetitionPenalty: Float,
+        noRepeatNgram: Int,
+        startTime: CFAbsoluteTime
+    ) async throws -> TranscriptionResult {
+        let sr = CohereAsrConfig.sampleRate
+        let chunks = Self.pauseAlignedChunks(
+            audio,
+            maxChunkSamples: Int(CohereAsrConfig.pauseChunkSeconds * Float(sr)),
+            searchSamples: Int(CohereAsrConfig.pauseSearchSeconds * Float(sr)),
+            windowSamples: CohereAsrConfig.pauseEnergyWindowSamples)
+
+        var tokens: [Int] = []
+        var texts: [String] = []
+        var encoderSecs: Double = 0
+        var decoderSecs: Double = 0
+        var cappedWindows = 0
+        for (index, range) in chunks.enumerated() {
+            let result = try await transcribe(
+                audio: Array(audio[range]),
+                models: models,
+                language: language,
+                maxNewTokens: maxNewTokens,
+                repetitionPenalty: repetitionPenalty,
+                noRepeatNgram: noRepeatNgram)
+
+            encoderSecs += result.encoderSeconds
+            decoderSecs += result.decoderSeconds
+            cappedWindows += result.cappedWindows
+            pipelineLogger.debug(
+                "Chunk \(index) [\(String(format: "%.2f", Double(range.lowerBound) / Double(sr)))s, "
+                    + "\(String(format: "%.2f", Double(range.upperBound) / Double(sr)))s): "
+                    + "\(result.tokenIds.count) tokens"
+                    + (result.cappedWindows > 0 ? ", hit cap" : ""))
+
+            tokens += result.tokenIds
+            let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty { texts.append(text) }
+        }
+
+        return TranscriptionResult(
+            text: texts.joined(),
+            tokenIds: tokens,
+            encoderSeconds: encoderSecs,
+            decoderSeconds: decoderSecs,
+            totalSeconds: CFAbsoluteTimeGetCurrent() - startTime,
+            cappedWindows: cappedWindows)
+    }
+
+    /// Cut `audio` into contiguous, non-overlapping chunks of at most
+    /// `maxChunkSamples`, each ending at a pause.
+    ///
+    /// Port of upstream `split_audio_chunks_energy` with configurable lengths:
+    /// from each chunk start, the cut goes at the start of the
+    /// `windowSamples`-long window with the least energy among those stepped
+    /// through the `searchSamples` before the chunk limit. Audio that fits in
+    /// one chunk is returned whole.
+    static func pauseAlignedChunks(
+        _ audio: [Float],
+        maxChunkSamples: Int,
+        searchSamples: Int,
+        windowSamples: Int
+    ) -> [Range<Int>] {
+        guard audio.count > maxChunkSamples, maxChunkSamples > 0 else {
+            return audio.isEmpty ? [] : [0..<audio.count]
+        }
+
+        var chunks: [Range<Int>] = []
+        var start = 0
+        while start < audio.count {
+            let limit = start + maxChunkSamples
+            if limit >= audio.count {
+                chunks.append(start..<audio.count)
+                break
+            }
+            let cut = quietestWindowStart(
+                audio, from: max(start, limit - searchSamples), to: limit, windowSamples: windowSamples)
+            // A cut at the chunk start would never advance.
+            let end = max(start + 1, cut)
+            chunks.append(start..<end)
+            start = end
+        }
+        return chunks
+    }
+
+    /// Start of the lowest-energy `windowSamples` window stepped through
+    /// `[from, to)`; the midpoint when the range is shorter than one window.
+    static func quietestWindowStart(
+        _ audio: [Float], from: Int, to: Int, windowSamples: Int
+    ) -> Int {
+        guard to - from > windowSamples, windowSamples > 0 else { return (from + to) / 2 }
+        var quietest = from
+        var lowest = Float.infinity
+        audio.withUnsafeBufferPointer { samples in
+            var offset = from
+            while offset + windowSamples < to {
+                var energy: Float = 0
+                vDSP_svesq(samples.baseAddress! + offset, 1, &energy, vDSP_Length(windowSamples))
+                if energy < lowest {
+                    lowest = energy
+                    quietest = offset
+                }
+                offset += windowSamples
+            }
+        }
+        return quietest
     }
 
     /// Merge two adjacent chunk token streams using longest-common-substring.
