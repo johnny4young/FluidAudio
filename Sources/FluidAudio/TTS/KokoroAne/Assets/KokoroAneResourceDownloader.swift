@@ -24,17 +24,21 @@ public enum KokoroAneResourceDownloader {
 
     /// Ensure all required mlmodelc + vocab + default voice files are present.
     /// Returns the repo directory containing them.
+    ///
+    /// - Parameter additionalModelNames: Opt-in bundles fetched on top of the
+    ///   variant's required set (e.g. the fp32 Vocoder, #1135).
     @discardableResult
     public static func ensureModels(
         variant: KokoroAneVariant = .english,
         directory: URL? = nil,
+        additionalModelNames: Set<String> = [],
         progressHandler: ProgressHandler? = nil
     ) async throws -> URL {
         let modelsDirectory = try directory ?? defaultModelsDirectory()
         let repo = variant.repo
         let repoDir = try repositoryDirectory(variant: variant, directory: modelsDirectory)
 
-        let required: Set<String>
+        var required: Set<String>
         switch variant {
         case .english, .spanish, .french:
             required = ModelNames.KokoroAne.requiredModels
@@ -43,6 +47,7 @@ public enum KokoroAneResourceDownloader {
         case .japanese:
             required = ModelNames.KokoroAne.requiredModelsJa
         }
+        required.formUnion(additionalModelNames)
 
         // ModelHub deliberately skips existing files. Repair legacy compiled
         // bundles before the existence-only fast path so caches created before
@@ -64,6 +69,7 @@ public enum KokoroAneResourceDownloader {
             try await ModelHub.download(
                 repo,
                 to: modelsDirectory,
+                additionalModelNames: additionalModelNames,
                 progressHandler: progressHandler
             )
         } else {
@@ -387,6 +393,12 @@ public enum KokoroAneResourceDownloader {
             return
         }
         logger.info("Downloading shared kokoro G2P assets from HuggingFace...")
+        // Fetches exactly `ModelNames.G2P.requiredModels` (the required set
+        // for `.kokoro` regardless of variant). `Repo.kokoro` opts out of
+        // ModelHub's loose root `.json` sweep, so the per-language lexicon
+        // caches beside these assets are not pulled here; each frontend
+        // fetches its own via `ensureLexiconCache` / `ensureEnglishLexicon`
+        // (#1044).
         try await ModelHub.download(
             .kokoro,
             to: modelsDirectory,
@@ -396,9 +408,9 @@ public enum KokoroAneResourceDownloader {
     }
 
     /// Best-effort fetch of Kokoro's preprocessed Misaki lexicon cache
-    /// (`us_lexicon_cache.json`) into the shared kokoro cache directory
-    /// (next to the G2P CoreML assets — same file StyleTTS2 consumes via
-    /// `LexiconAssetCache`).
+    /// (`us_lexicon_cache.json`, or `gb_lexicon_cache.json` with `british`)
+    /// into the shared kokoro cache directory (next to the G2P CoreML
+    /// assets — same file StyleTTS2 consumes via `LexiconAssetCache`).
     ///
     /// Returns the kokoro cache directory when the file is resident
     /// (pre-cached or freshly downloaded), or `nil` when it is missing
@@ -407,9 +419,10 @@ public enum KokoroAneResourceDownloader {
     /// quality booster (Misaki weak forms for function words, issue
     /// #691), not a hard dependency.
     public static func ensureEnglishLexicon(
-        directory: URL? = nil
+        directory: URL? = nil,
+        british: Bool = false
     ) async -> URL? {
-        let filename = "us_lexicon_cache.json"
+        let filename = LexiconAssetCache.englishFileName(british: british)
         do {
             let modelsDirectory = try directory ?? defaultModelsDirectory()
             let kokoroDir = modelsDirectory.appendingPathComponent(Repo.kokoro.folderName)

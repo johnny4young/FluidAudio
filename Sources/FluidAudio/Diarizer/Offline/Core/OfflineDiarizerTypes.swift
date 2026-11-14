@@ -9,6 +9,8 @@ public enum OfflineDiarizationError: Error, LocalizedError {
     case processingFailed(String)
     case noSpeechDetected
     case exportFailed(String)
+    /// A time span passed to `embedSpans` is not finite, ends before it starts, or starts after the audio ends.
+    case invalidSpan(String)
 
     public var errorDescription: String? {
         switch self {
@@ -24,6 +26,8 @@ public enum OfflineDiarizationError: Error, LocalizedError {
             return "No speech detected in audio"
         case .exportFailed(let message):
             return "Failed to export data: \(message)"
+        case .invalidSpan(let message):
+            return "Invalid span: \(message)"
         }
     }
 }
@@ -212,17 +216,25 @@ public struct OfflineDiarizerConfig: Sendable {
         public var minGapDurationSeconds: Double
 
         /// When true, output segments are made non-overlapping by trimming later segments
-        /// so that only one speaker is active at any given time.
+        /// so that only one speaker is active at any given time: a segment that starts while an
+        /// earlier one is still active starts when that one ends, and is dropped if nothing, or less
+        /// than `Embedding.minSegmentDurationSeconds`, is left.
+        /// Use it when every instant needs a single speaker, for example to attribute ASR words.
+        ///
+        /// Defaults to false, which keeps overlapping speech like pyannote community-1's main
+        /// `speaker_diarization` output. Trimming drops the second speaker of every overlap, which
+        /// counts as missed speech when overlap is scored (#1049).
+        ///
         /// This is independent of `Embedding.excludeOverlap` which controls overlap masking
         /// during embedding extraction.
         public var exclusiveSegments: Bool
 
         public static let community = PostProcessing(
             minGapDurationSeconds: 0.1,
-            exclusiveSegments: true
+            exclusiveSegments: false
         )
 
-        public init(minGapDurationSeconds: Double, exclusiveSegments: Bool = true) {
+        public init(minGapDurationSeconds: Double, exclusiveSegments: Bool = false) {
             self.minGapDurationSeconds = minGapDurationSeconds
             self.exclusiveSegments = exclusiveSegments
         }

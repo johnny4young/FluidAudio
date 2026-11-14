@@ -7,7 +7,7 @@ public actor AsrManager {
 
     internal let logger = AppLogger(category: "ASR")
     internal let config: ASRConfig
-    private let audioConverter: AudioConverter = AudioConverter()
+    private let audioConverter: AudioConverter
 
     internal var preprocessorModel: MLModel?
     internal var encoderModel: MLModel?
@@ -95,6 +95,7 @@ public actor AsrManager {
 
     public init(config: ASRConfig = .default, models: AsrModels? = nil) {
         self.config = config
+        self.audioConverter = AudioConverter(resamplerQuality: config.resamplerQuality)
 
         if let models {
             self.asrModels = models
@@ -288,6 +289,7 @@ public actor AsrManager {
         decoderState: inout TdtDecoderState,
         contextFrameAdjustment: Int = 0,
         isLastChunk: Bool = false,
+        flushPendingTokens: Bool? = nil,
         globalFrameOffset: Int = 0,
         language: Language? = nil,
         emitTokensAfterGlobalFrame: Int? = nil,
@@ -345,7 +347,7 @@ public actor AsrManager {
                 emitTokensAfterGlobalFrame: emitTokensAfterGlobalFrame,
                 initialTimeIndexOverride: initialTimeIndexOverride
             )
-        case .v3, .redux, .ultra, .phonon2:
+        case .v3, .redux, .ultra, .phonon2, .phonon25, .bark3, .bark3Clean:
             // Pass `vocabulary` unconditionally. `TdtDecoderV3.tokenLanguageFilter`
             // short-circuits when `language` is nil, so there's no cost to
             // forwarding vocab in the default path.
@@ -359,6 +361,7 @@ public actor AsrManager {
                 decoderState: &decoderState,
                 contextFrameAdjustment: contextFrameAdjustment,
                 isLastChunk: isLastChunk,
+                flushPendingTokens: flushPendingTokens,
                 globalFrameOffset: globalFrameOffset,
                 language: language,
                 vocabulary: vocabulary,
@@ -387,6 +390,7 @@ public actor AsrManager {
                 decoderState: &decoderState,
                 contextFrameAdjustment: contextFrameAdjustment,
                 isLastChunk: isLastChunk,
+                flushPendingTokens: flushPendingTokens,
                 globalFrameOffset: globalFrameOffset,
                 punctuationTokenIds: punctuationTokenIds,
                 emitTokensAfterGlobalFrame: emitTokensAfterGlobalFrame,
@@ -475,7 +479,8 @@ public actor AsrManager {
         let factory = AudioSourceFactory()
         let (sampleSource, _) = try factory.makeDiskBackedSource(
             from: url,
-            targetSampleRate: config.sampleRate
+            targetSampleRate: config.sampleRate,
+            resamplerQuality: config.resamplerQuality
         )
 
         let totalSamples = sampleSource.sampleCount
@@ -565,7 +570,9 @@ public actor AsrManager {
     internal func convertTokensToText(_ tokenIds: [Int]) -> String {
         guard !tokenIds.isEmpty else { return "" }
 
-        let tokens = tokenIds.compactMap { vocabulary[$0] }.filter { !$0.isEmpty }
+        let tokens = tokenIds.compactMap { vocabulary[$0] }.filter {
+            !$0.isEmpty && $0 != ASRConstants.sentencePieceUnknownToken
+        }
         return tokens.joined()
             .replacingOccurrences(of: ASRConstants.sentencePieceWordBoundary, with: " ")
             .trimmingCharacters(in: .whitespaces)
