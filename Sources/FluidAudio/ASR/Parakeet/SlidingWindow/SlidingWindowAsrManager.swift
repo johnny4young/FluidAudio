@@ -9,7 +9,7 @@ import OSLog
 /// Similar to Apple's SpeechAnalyzer, it handles audio conversion and buffering automatically.
 public actor SlidingWindowAsrManager {
     private let logger = AppLogger(category: "SlidingWindowASR")
-    private let audioConverter: AudioConverter = AudioConverter()
+    private let audioConverter: AudioConverter
     private let config: SlidingWindowAsrConfig
 
     // Audio input stream
@@ -150,6 +150,7 @@ public actor SlidingWindowAsrManager {
     /// - Parameter config: Configuration for streaming behavior
     public init(config: SlidingWindowAsrConfig = .default) {
         self.config = config
+        self.audioConverter = AudioConverter(resamplerQuality: config.resamplerQuality)
 
         // Create input stream
         let (stream, continuation) = AsyncStream<AVAudioPCMBuffer>.makeStream()
@@ -1046,6 +1047,9 @@ public struct SlidingWindowAsrConfig: Sendable {
     /// tdtJa models (same behavior as the batch API).
     public let language: Language?
 
+    /// Resampler for audio that does not arrive as 16 kHz mono; matches `ASRConfig.resamplerQuality`.
+    public let resamplerQuality: AudioConverter.ResamplerQuality
+
     /// Default configuration using the proven 11+2+2 window layout.
     /// The assembled window (left + chunk + right) must fit the model's fixed
     /// 15 s input (`ASRConstants.maxModelSamples`); 2 + 11 + 2 = 15 s fits exactly.
@@ -1078,7 +1082,8 @@ public struct SlidingWindowAsrConfig: Sendable {
         minContextForConfirmation: TimeInterval = 10.0,
         confirmationThreshold: Double = 0.85,
         tdtConfig: TdtConfig? = nil,
-        language: Language? = nil
+        language: Language? = nil,
+        resamplerQuality: AudioConverter.ResamplerQuality = .balanced
     ) {
         self.chunkSeconds = chunkSeconds
         self.hypothesisChunkSeconds = hypothesisChunkSeconds
@@ -1088,6 +1093,7 @@ public struct SlidingWindowAsrConfig: Sendable {
         self.confirmationThreshold = confirmationThreshold
         self.tdtConfig = tdtConfig
         self.language = language
+        self.resamplerQuality = resamplerQuality
     }
 
     /// Returns a copy of this config with the given TDT configuration applied.
@@ -1100,7 +1106,8 @@ public struct SlidingWindowAsrConfig: Sendable {
             minContextForConfirmation: minContextForConfirmation,
             confirmationThreshold: confirmationThreshold,
             tdtConfig: tdtConfig,
-            language: language
+            language: language,
+            resamplerQuality: resamplerQuality
         )
     }
 
@@ -1114,7 +1121,8 @@ public struct SlidingWindowAsrConfig: Sendable {
             minContextForConfirmation: minContextForConfirmation,
             confirmationThreshold: confirmationThreshold,
             tdtConfig: tdtConfig,
-            language: language
+            language: language,
+            resamplerQuality: resamplerQuality
         )
     }
 
@@ -1152,7 +1160,8 @@ public struct SlidingWindowAsrConfig: Sendable {
     var asrConfig: ASRConfig {
         ASRConfig(
             sampleRate: 16000,
-            tdtConfig: tdtConfig ?? TdtConfig()
+            tdtConfig: tdtConfig ?? TdtConfig(),
+            resamplerQuality: resamplerQuality
         )
     }
 

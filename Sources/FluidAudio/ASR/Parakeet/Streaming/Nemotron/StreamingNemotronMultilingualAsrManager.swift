@@ -69,7 +69,7 @@ public actor StreamingNemotronMultilingualAsrManager {
     internal var jointNoEncProjBatchedK: Int = 8
 
     // Components
-    private let audioConverter = AudioConverter()
+    private let audioConverter: AudioConverter
     internal var tokenizer: NemotronMultilingualTokenizer?
 
     // Configuration (loaded from metadata.json)
@@ -282,7 +282,11 @@ public actor StreamingNemotronMultilingualAsrManager {
 
     public internal(set) var mlConfiguration: MLModelConfiguration
 
-    public init(configuration: MLModelConfiguration? = nil) {
+    /// - Parameter resamplerQuality: Resampler for audio that does not arrive as 16 kHz mono.
+    public init(
+        configuration: MLModelConfiguration? = nil, resamplerQuality: AudioConverter.ResamplerQuality = .balanced
+    ) {
+        self.audioConverter = AudioConverter(resamplerQuality: resamplerQuality)
         // Default to `.cpuAndNeuralEngine`: the int8 encoder is ANE-targeted.
         // `MLModelConfiguration()`'s default `.all` routes int8 ops to GPU
         // and runs ~10× slower than the ANE path.

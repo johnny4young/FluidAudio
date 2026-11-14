@@ -68,6 +68,16 @@ final class SlidingWindowAsrManagerTests: XCTestCase {
         XCTAssertEqual(adapted.language, .german)
     }
 
+    func testResamplerQualityDefaultsToBalancedAndReachesTheAsrConfig() {
+        XCTAssertEqual(SlidingWindowAsrConfig.default.resamplerQuality, .balanced)
+        XCTAssertEqual(SlidingWindowAsrConfig.default.asrConfig.resamplerQuality, .balanced)
+
+        let best = SlidingWindowAsrConfig(resamplerQuality: .best)
+        XCTAssertEqual(best.asrConfig.resamplerQuality, .best)
+        XCTAssertEqual(best.applying(language: .spanish).resamplerQuality, .best)
+        XCTAssertEqual(best.applying(tdtConfig: TdtConfig()).resamplerQuality, .best)
+    }
+
     func testConfigPresets() {
         // Test default config
         let defaultConfig = SlidingWindowAsrConfig.default
