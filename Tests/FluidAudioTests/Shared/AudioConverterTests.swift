@@ -645,20 +645,35 @@ final class AudioConverterTests: XCTestCase {
 
     func testConcurrentConversionsMatchSerialResults() async throws {
         let source = try createAudioBuffer(sampleRate: 48000, channels: 1, duration: 0.5)
-        let buffers = try (0..<16).map { try slice(source, frames: 256 + $0 * 37) }
-        let expected = try buffers.map { try AudioConverter().resampleBuffer($0) }
+        let samples = Array(UnsafeBufferPointer(start: source.floatChannelData![0], count: Int(source.frameLength)))
+        let slices = (0..<16).map { Array(samples.prefix(256 + $0 * 37)) }
+        let expected = try slices.map { try AudioConverter().resampleBuffer(Self.monoBuffer($0, sampleRate: 48000)) }
         let converter = audioConverter!
 
         let results = try await withThrowingTaskGroup(of: (Int, [Float]).self) { group in
-            for (index, buffer) in buffers.enumerated() {
-                nonisolated(unsafe) let buffer = buffer
-                group.addTask { (index, try converter.resampleBuffer(buffer)) }
+            for (index, slice) in slices.enumerated() {
+                group.addTask {
+                    (index, try converter.resampleBuffer(Self.monoBuffer(slice, sampleRate: 48000)))
+                }
             }
-            var byIndex = [[Float]](repeating: [], count: buffers.count)
+            var byIndex = [[Float]](repeating: [], count: slices.count)
             for try await (index, samples) in group { byIndex[index] = samples }
             return byIndex
         }
         XCTAssertEqual(results, expected)
+    }
+
+    private static func monoBuffer(_ samples: [Float], sampleRate: Double) throws -> AVAudioPCMBuffer {
+        guard
+            let format = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1, interleaved: false),
+            let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count))
+        else { throw AudioConverterError.failedToCreateBuffer }
+        buffer.frameLength = AVAudioFrameCount(samples.count)
+        samples.withUnsafeBufferPointer {
+            buffer.floatChannelData![0].update(from: $0.baseAddress!, count: samples.count)
+        }
+        return buffer
     }
 
     private func slice(_ buffer: AVAudioPCMBuffer, frames: Int) throws -> AVAudioPCMBuffer {
